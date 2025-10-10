@@ -1,0 +1,52 @@
+import time
+from typing import Optional, List
+import ccxt
+import pandas as pd
+
+SUPPORTED_TIMEFRAMES = {"1m":"1m","5m":"5m","15m":"15m","30m":"30m","1h":"1h","4h":"4h","1d":"1d"}
+
+def _init_exchange(exchange_id: str = "binance", enable_rate_limit: bool = True):
+    ex_cls = getattr(ccxt, exchange_id)
+    ex = ex_cls({"enableRateLimit": enable_rate_limit})
+    return ex
+
+def fetch_ohlcv_full(symbol: str="BNB/USDT", timeframe: str="1h", since_iso: Optional[str]="2019-01-01T00:00:00Z",
+                     exchange_id: str="binance", limit: int=1000, max_candles: Optional[int]=None, pause_sec: float=0.8) -> pd.DataFrame:
+    if timeframe not in SUPPORTED_TIMEFRAMES:
+        raise ValueError(f"Unsupported timeframe {timeframe}; choose one of {list(SUPPORTED_TIMEFRAMES)}")
+    ex = _init_exchange(exchange_id)
+    since_ms = ex.parse8601(since_iso) if since_iso else None
+
+    all_rows: List[list] = []
+    fetched = 0
+    while True:
+        ohlcv = ex.fetch_ohlcv(symbol, timeframe=timeframe, since=since_ms, limit=limit)
+        if not ohlcv:
+            break
+        all_rows += ohlcv
+        fetched += len(ohlcv)
+        since_ms = ohlcv[-1][0] + 1
+        if max_candles and fetched >= max_candles:
+            break
+        time.sleep(pause_sec)
+        if len(ohlcv) < limit:
+            break
+
+    if not all_rows:
+        raise RuntimeError("No OHLCV data returned. Check symbol/timeframe or network.")
+
+    df = pd.DataFrame(all_rows, columns=["ts","open","high","low","close","volume"])
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+    df = df.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    return df
+
+def save_csv(df: pd.DataFrame, path: str):
+    import os
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    df.to_csv(path, index=False)
+
+if __name__ == "__main__":
+    df = fetch_ohlcv_full("BNB/USDT", "1h", "2019-01-01T00:00:00Z", max_candles=1500)
+    print(df.head(), "\n---\n", df.tail())
+    save_csv(df, "data/BNBUSDT_1h.csv")
+    print("Saved -> data/BNBUSDT_1h.csv, rows:", len(df))

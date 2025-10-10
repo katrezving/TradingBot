@@ -1,0 +1,14 @@
+risk_guards:
+  vol_percentiles: {low: 25, high: 90}
+  actions:
+    low_vol: {mode: pause}
+    normal_vol: {mode: run, size_mult: 1.0}
+    high_vol: {mode: run, size_mult: 0.5}
+  spread_max: 0.001
+  slippage_max: 0.0015
+  volume_min_pctile: 10
+  sentiment_gate: {min: -0.8, max: 0.8, action: "halve_size"}
+  killswitch:
+    daily_loss_R: -2.0
+    weekly_dd_R: -6.0
+    perf_sigma_deterioration: 2.0

@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-dotenv==1.0.1
+pydantic==2.9.2
+redis==5.0.8
+psycopg[binary]>=3.2.2,<3.3
+mlflow-skinny==2.16.0
+loguru==0.7.2
+ccxt==4.3.82
+pandas-ta==0.4.71b0
+scikit-learn==1.7.2
+joblib==1.4.2
