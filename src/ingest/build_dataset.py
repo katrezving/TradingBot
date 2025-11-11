@@ -1,72 +1,91 @@
-"""
-build_dataset.py
-================
-Une el dataset base (por hora o minuto) con integraciones externas:
-- Fear & Greed (diario)
-- CryptoPanic (horario)
-- CoinGlass / CoinMarketCap (variable)
-
-Usa merge_asof con tolerancia para respetar diferencias temporales (e.g. FG diario vs velas horarias).
-"""
-
 import argparse
 import pandas as pd
 from pathlib import Path
+import logging
+import os
 
+# ==========================================================
+# Logging configurado
+# ==========================================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ==============================
 # Utilidades
 # ==============================
 def _merge_asof_with_tolerance(base_df, add_df, on="timestamp", tolerance_hours=6, prefix=None):
-    """Realiza un merge_asof tolerante al tiempo para combinar integraciones de distinta frecuencia."""
     if add_df is None or add_df.empty:
+        logger.warning("El DataFrame adicional está vacío o es None; se omite el merge_asof.")
+        return base_df
+    try:
+        add_df = add_df.sort_values(on)
+        base_df = base_df.sort_values(on)
+        merged = pd.merge_asof(
+            base_df,
+            add_df,
+            on=on,
+            direction="backward",
+            tolerance=pd.Timedelta(hours=tolerance_hours)
+        )
+        if prefix:
+            merged = merged.rename(columns={c: f"{prefix}{c}" for c in add_df.columns if c != on})
+        logger.info(f"Merge_asof completado; cols añadidas: {list(add_df.columns)}")
+        return merged
+    except Exception as e:
+        logger.error(f"Error en merge_asof: {e}")
         return base_df
 
-    add_df = add_df.sort_values(on)
-    base_df = base_df.sort_values(on)
-    merged = pd.merge_asof(
-        base_df,
-        add_df,
-        on=on,
-        direction="backward",
-        tolerance=pd.Timedelta(hours=tolerance_hours)
-    )
-
-    if prefix:
-        merged = merged.rename(columns={c: f"{prefix}{c}" for c in add_df.columns if c != on})
-    return merged
-
-
 def _add_lags(df, col, lags=[1, 6]):
-    """Crea columnas de rezago (lag) para features de baja frecuencia como FG."""
-    for lag in lags:
-        df[f"{col}_lag{lag}"] = df[col].shift(lag)
+    try:
+        for lag in lags:
+            df[f"{col}_lag{lag}"] = df[col].shift(lag)
+        logger.info(f"Lags añadidos para columna {col}: {lags}")
+    except Exception as e:
+        logger.error(f"Error añadiendo lags: {e}")
     return df
 
-
-# ==============================
-# Carga de integraciones
-# ==============================
 def load_fear_greed(path, ffill_hours=72):
-    fg = pd.read_csv(path)
-    fg["timestamp"] = pd.to_datetime(fg["timestamp"], utc=True)
-    fg = fg.sort_values("timestamp")
-
-    # Valor numérico principal
-    fg["fg_value"] = fg["fg_value"].astype(float)
-    fg["fg_z"] = (fg["fg_value"] - fg["fg_value"].mean()) / fg["fg_value"].std()
-    fg = _add_lags(fg, "fg_value")
-    fg = _add_lags(fg, "fg_z")
-    return fg
-
+    try:
+        fg = pd.read_csv(path)
+        fg["timestamp"] = pd.to_datetime(fg["timestamp"], utc=True)
+        fg = fg.sort_values("timestamp")
+        fg["fg_value"] = fg["fg_value"].astype(float)
+        fg["fg_z"] = (fg["fg_value"] - fg["fg_value"].mean()) / fg["fg_value"].std()
+        fg = _add_lags(fg, "fg_value")
+        fg = _add_lags(fg, "fg_z")
+        logger.info("Fear&Greed cargado y lags realizados.")
+        return fg
+    except Exception as e:
+        logger.error(f"Error cargando fear_greed: {e}")
+        return pd.DataFrame()  # vacío para no romper pipeline
 
 def load_hourly_csv(path):
-    df = pd.read_csv(path)
-    if "timestamp" not in df.columns:
-        raise ValueError(f"El archivo {path} no contiene columna 'timestamp'")
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    return df.sort_values("timestamp")
+    try:
+        df = pd.read_csv(path)
+        if "timestamp" not in df.columns:
+            msg = f"El archivo {path} no contiene columna 'timestamp'"
+            logger.error(msg)
+            raise ValueError(msg)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        logger.info(f"Archivo horario cargado OK: {path}, filas={len(df)}")
+        return df.sort_values("timestamp")
+    except Exception as e:
+        logger.error(f"Error cargando CSV: {path} — {e}")
+        return pd.DataFrame()
 
+def safe_save(df, path, backup=True):
+    out_path = Path(path)
+    try:
+        if backup and out_path.exists():
+            backup_path = out_path.with_suffix(out_path.suffix + ".bak")
+            if backup_path.exists():
+                backup_path.unlink()
+            out_path.rename(backup_path)
+            logger.info(f"Backup realizado: {out_path.name} -> {backup_path.name}")
+        df.to_csv(out_path, index=False)
+        logger.info(f"Archivo guardado en {out_path}")
+    except Exception as e:
+        logger.error(f"Error guardando archivo: {e}")
 
 # ==============================
 # MAIN
@@ -105,83 +124,66 @@ def main():
     # ==============================
     # Cargar base
     # ==============================
-    print(f"[build_dataset] Cargando base: {args.base}")
-    df = pd.read_csv(args.base)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    print(f"[build_dataset] Base filas={len(df)} cols={len(df.columns)}")
+    logger.info(f"Cargando base: {args.base}")
+    try:
+        df = pd.read_csv(args.base)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        logger.info(f"Base filas={len(df)} cols={len(df.columns)}")
+    except Exception as e:
+        logger.error(f"Error cargando base: {e}")
+        return
 
     # ==============================
     # Fear & Greed
     # ==============================
     if args.fg_source == "integrations":
-        try:
-            fg_df = load_fear_greed(args.fg_cache, args.fg_ffill_hours)
-            print(f"[fear_greed] Registros: {len(fg_df)} rango: {fg_df['timestamp'].min()} -> {fg_df['timestamp'].max()}")
-            df = _merge_asof_with_tolerance(df, fg_df, tolerance_hours=args.fg_ffill_hours)
-            print("[build_dataset] FG cols añadidas:",
-                  [c for c in df.columns if c.startswith("fg_")])
-            print("[build_dataset] FG NA ratio:",
-                  {c: round(float(df[c].isna().mean()), 4) for c in df.columns if c.startswith("fg_")})
-        except Exception as e:
-            print(f"[build_dataset] Error cargando Fear&Greed: {e}")
+        fg_df = load_fear_greed(args.fg_cache, args.fg_ffill_hours)
+        df = _merge_asof_with_tolerance(df, fg_df, tolerance_hours=args.fg_ffill_hours)
+        fg_cols = [c for c in df.columns if c.startswith("fg_")]
+        logger.info(f"FG cols añadidas: {fg_cols}")
+        logger.info(f"FG NA ratio: { {c: round(float(df[c].isna().mean()), 4) for c in fg_cols} } ")
     else:
-        print("[build_dataset] Fear&Greed: desactivado (--fg-source=none).")
+        logger.info("Fear&Greed: desactivado (--fg-source=none).")
 
     # ==============================
     # CryptoPanic
     # ==============================
     if args.cp_source == "csv":
-        try:
-            cp_df = load_hourly_csv(args.cp_hourly)
-            df = _merge_asof_with_tolerance(df, cp_df, tolerance_hours=args.cp_ffill_hours, prefix=args.cp_prefix)
-            print(f"[build_dataset] CP cols añadidas: {[c for c in df.columns if c.startswith(args.cp_prefix)]}")
-            print(f"[build_dataset] CP NA ratio: {{c: round(float(df[c].isna().mean()),4) for c in df.columns if c.startswith(args.cp_prefix)}}")
-        except Exception as e:
-            print(f"[build_dataset] Error cargando CryptoPanic: {e}")
+        cp_df = load_hourly_csv(args.cp_hourly)
+        df = _merge_asof_with_tolerance(df, cp_df, tolerance_hours=args.cp_ffill_hours, prefix=args.cp_prefix)
+        cp_cols = [c for c in df.columns if c.startswith(args.cp_prefix)]
+        logger.info(f"CP cols añadidas: {cp_cols}")
+        logger.info(f"CP NA ratio: { {c: round(float(df[c].isna().mean()), 4) for c in cp_cols} } ")
     else:
-        print("[build_dataset] CryptoPanic: desactivado.")
+        logger.info("CryptoPanic: desactivado.")
 
     # ==============================
     # CoinGlass
     # ==============================
     if args.cg_source == "csv":
-        try:
-            cg_df = load_hourly_csv(args.cg_hourly)
-            df = _merge_asof_with_tolerance(df, cg_df, tolerance_hours=args.cg_ffill_hours, prefix=args.cg_prefix)
-            print(f"[build_dataset] CG cols añadidas: {[c for c in df.columns if c.startswith(args.cg_prefix)]}")
-        except Exception as e:
-            print(f"[build_dataset] Error cargando CoinGlass: {e}")
+        cg_df = load_hourly_csv(args.cg_hourly)
+        df = _merge_asof_with_tolerance(df, cg_df, tolerance_hours=args.cg_ffill_hours, prefix=args.cg_prefix)
+        cg_cols = [c for c in df.columns if c.startswith(args.cg_prefix)]
+        logger.info(f"CG cols añadidas: {cg_cols}")
     else:
-        print("[build_dataset] CoinGlass: desactivado.")
+        logger.info("CoinGlass: desactivado.")
 
     # ==============================
     # CoinMarketCap
     # ==============================
     if args.cmc_source == "csv":
-        try:
-            cmc_df = load_hourly_csv(args.cmc_hourly)
-            df = _merge_asof_with_tolerance(df, cmc_df, tolerance_hours=args.cmc_ffill_hours, prefix=args.cmc_prefix)
-            print(f"[build_dataset] CMC cols añadidas: {[c for c in df.columns if c.startswith(args.cmc_prefix)]}")
-        except Exception as e:
-            print(f"[build_dataset] Error cargando CoinMarketCap: {e}")
+        cmc_df = load_hourly_csv(args.cmc_hourly)
+        df = _merge_asof_with_tolerance(df, cmc_df, tolerance_hours=args.cmc_ffill_hours, prefix=args.cmc_prefix)
+        cmc_cols = [c for c in df.columns if c.startswith(args.cmc_prefix)]
+        logger.info(f"CMC cols añadidas: {cmc_cols}")
     else:
-        print("[build_dataset] CoinMarketCap: desactivado.")
+        logger.info("CoinMarketCap: desactivado.")
 
     # ==============================
     # Guardado
     # ==============================
-    out_path = Path(args.out)
-    if args.write_mode == "backup" and out_path.exists():
-        backup_path = out_path.with_suffix(out_path.suffix + ".bak")
-        if backup_path.exists():
-            backup_path.unlink()  # elimina el anterior
-            out_path.rename(backup_path)
-        print(f"[build_dataset] Respaldando {out_path.name} -> {backup_path.name}")
-
-    df.to_csv(out_path, index=False)
-    print(f"[build_dataset] Guardando: {out_path}")
-    print("[build_dataset] Done.")
-
+    safe_save(df, args.out, backup=args.write_mode == "backup")
+    logger.info("Proceso build_dataset finalizado.")
 
 if __name__ == "__main__":
     main()
