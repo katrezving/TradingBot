@@ -1,35 +1,58 @@
+import argparse
 import pandas as pd
-from glob import glob
+from pathlib import Path
+import logging
 import os
 
-def merge_pairs(input_dir="data", output_file="data/ALLPAIRS_1h_features_h6.csv"):
-    """
-    Une todos los datasets *_1h_features_h6.csv en un único archivo.
-    Añade una columna 'symbol' para identificar el par.
-    """
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    files = glob(os.path.join(input_dir, "*_1h_features_h6.csv"))
-    if not files:
-        print("❌ No se encontraron archivos *_1h_features_h6.csv en la carpeta data/")
-        return
+def load_feature_file(filepath, required_cols=["ts", "symbol", "close"]):
+    try:
+        df = pd.read_csv(filepath)
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            logger.error(f"Archivo {filepath} sin columnas requeridas: {missing}")
+            return None
+        logger.info(f"Archivo {filepath} cargado correctamente ({len(df)} filas).")
+        return df
+    except Exception as e:
+        logger.error(f"Error leyendo archivo {filepath}: {e}")
+        return None
 
+def merge_feature_files(files):
     dfs = []
-    for f in files:
-        sym = os.path.basename(f).split("_")[0]  # ejemplo: BTCUSDT_1h_features_h6.csv -> BTCUSDT
-        d = pd.read_csv(f)
-        d["symbol"] = sym
-        dfs.append(d)
-        print(f"✅ Añadido: {sym} ({len(d)} filas)")
+    for file in files:
+        df = load_feature_file(file)
+        if df is not None:
+            dfs.append(df)
+    if not dfs:
+        logger.error("No se cargó ningún archivo; abortando merge.")
+        return pd.DataFrame()
+    merged = pd.concat(dfs, axis=0, ignore_index=True)
+    merged = merged.drop_duplicates(subset=["ts", "symbol"])
+    merged = merged.sort_values(["symbol", "ts"]).reset_index(drop=True)
+    logger.info(f"Merge finalizado: {len(merged)} filas, {len(merged.columns)} columnas.")
+    return merged
 
-    df_all = pd.concat(dfs, ignore_index=True)
-    df_all = df_all.drop_duplicates(subset=["ts", "symbol"]).reset_index(drop=True)
-    df_all = df_all.sort_values(["symbol", "ts"])
+def main():
+    parser = argparse.ArgumentParser(description="Merge de features para distintos pares.")
+    parser.add_argument("--in-folder", default="data/", help="Carpeta con archivos *_features*.csv")
+    parser.add_argument("--out", default="data/all_pairs_features.csv", help="Ruta de salida para el merge final.")
+    parser.add_argument("--pattern", default="_features", help="Patrón para archivos de features.")
+    args = parser.parse_args()
 
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    df_all.to_csv(output_file, index=False)
-    print(f"\n📦 Dataset unificado guardado en: {output_file}")
-    print(f"Total de filas combinadas: {len(df_all)}")
-    print(f"Símbolos incluidos: {df_all['symbol'].unique().tolist()}")
+    path = Path(args.in_folder)
+    files = [str(f) for f in path.glob(f"*{args.pattern}*.csv") if f.is_file()]
+    logger.info(f"Archivos a unir: {files}")
+
+    merged = merge_feature_files(files)
+    if not merged.empty:
+        try:
+            merged.to_csv(args.out, index=False)
+            logger.info(f"Archivo guardado exitosamente en {args.out}")
+        except Exception as e:
+            logger.error(f"Error guardando archivo final: {e}")
 
 if __name__ == "__main__":
-    merge_pairs()
+    main()
