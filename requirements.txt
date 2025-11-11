@@ -10,3 +10,4 @@ ccxt==4.3.82
 pandas-ta==0.4.71b0
 scikit-learn==1.7.2
 joblib==1.4.2
+shap==0.42.0

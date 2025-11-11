@@ -2,6 +2,7 @@ import argparse
 import joblib
 import logging
 import pandas as pd
+import json
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 
 logging.basicConfig(level=logging.INFO)
@@ -45,7 +46,10 @@ def evaluate(model, df, features, target, threshold=0.5):
 
 def export_results(metrics, preds, probas, out_metrics, out_preds):
     try:
-        pd.DataFrame([metrics]).to_csv(out_metrics, index=False)
+        # GUARDA MÉTRICAS COMO JSON
+        with open(out_metrics, "w") as f:
+            json.dump(metrics, f, indent=2)
+        # Predicciones como CSV (ok)
         pd.DataFrame({"y_pred": preds, "y_proba": probas}).to_csv(out_preds, index=False)
         logger.info(f"Métricas guardadas en {out_metrics}, predicciones en {out_preds}")
     except Exception as e:
