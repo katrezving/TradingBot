@@ -1,0 +1,16 @@
+{
+  "metrics": {
+    "accuracy": 0.6256419684991114,
+    "f1_macro": 0.6246073952951345,
+    "roc_auc": 0.6580138799262512,
+    "mcc": 0.2551503572262049
+  },
+  "optimized_threshold": {
+    "metric": "f1",
+    "best_threshold": 0.01,
+    "best_score": 0.6738000946879261
+  },
+  "n_rows": 326340,
+  "n_features": 46,
+  "classes_detected": 2
+}

@@ -1,0 +1,74 @@
+{
+  "global": {
+    "ret_mult": -0.6414973380088128,
+    "total_return_pct": -1.6414973380088127,
+    "profit_factor": 0.16797208148892864,
+    "max_drawdown": -1.6414579637774274,
+    "sharpe_like": -16.769470502049884
+  },
+  "params": {
+    "threshold_used": 0.6,
+    "side": "short",
+    "fee": 0.0007,
+    "entry_at": "open",
+    "spread_bps": 5.0,
+    "slippage_bps": 5.0,
+    "stop_loss_bps": null,
+    "take_profit_bps": null,
+    "fill_priority": "adverse_first",
+    "capital": 10000.0,
+    "position_usd": 1000.0,
+    "risk_per_trade": null,
+    "max_positions": 1
+  },
+  "per_symbol": [
+    {
+      "symbol": "BNBUSDT",
+      "winrate": 0.20681818181818182,
+      "profit_factor": 0.18642292099652844,
+      "max_drawdown": -1.6993206377622023,
+      "ret_mult": -0.699127719962734,
+      "n_exits": 2200
+    },
+    {
+      "symbol": "BTCUSDT",
+      "winrate": 0.1859517089996864,
+      "profit_factor": 0.17101466938596227,
+      "max_drawdown": -1.795821834546054,
+      "ret_mult": -0.7958218345460542,
+      "n_exits": 3189
+    },
+    {
+      "symbol": "DOTUSDT",
+      "winrate": 0.25101921956901574,
+      "profit_factor": 0.22939359811845114,
+      "max_drawdown": -1.4776688256899526,
+      "ret_mult": -0.48243379125465335,
+      "n_exits": 1717
+    },
+    {
+      "symbol": "ETHUSDT",
+      "winrate": 0.2159090909090909,
+      "profit_factor": 0.20535061725019982,
+      "max_drawdown": -1.911573971809644,
+      "ret_mult": -0.9110489806854984,
+      "n_exits": 2728
+    },
+    {
+      "symbol": "LTCUSDT",
+      "winrate": 0.20338266384778012,
+      "profit_factor": 0.19872470255129232,
+      "max_drawdown": -1.9650930017421793,
+      "ret_mult": -0.9648863788694494,
+      "n_exits": 2365
+    },
+    {
+      "symbol": "SOLUSDT",
+      "winrate": 0.24349566377585058,
+      "profit_factor": 0.1772838505209207,
+      "max_drawdown": -1.756095776757925,
+      "ret_mult": -0.7550360215099294,
+      "n_exits": 1499
+    }
+  ]
+}
