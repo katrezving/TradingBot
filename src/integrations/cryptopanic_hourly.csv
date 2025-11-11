@@ -1,2 +1,3 @@
-timestamp,cp_n_posts,cp_score_simple_mean,cp_score_weighted_mean,cp_important_sum,cp_bull_minus_bear
-2025-11-10 15:00:00+0000,20.0,0.0,0.0,0.0,0.0
+version https://git-lfs.github.com/spec/v1
+oid sha256:271392f870e092861d600587d43d2427fb6c8822f98ebe1576aef340658b295d
+size 147
