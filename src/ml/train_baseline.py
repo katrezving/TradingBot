@@ -1,231 +1,111 @@
-import os
 import argparse
-import joblib
-import numpy as np
 import pandas as pd
+import numpy as np
+import lightgbm as lgb
+import joblib
+import logging
+from pathlib import Path
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
+from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, confusion_matrix
-)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ======================================================
-# FUNCIONES AUXILIARES
-# ======================================================
-
-def load_dataset(path: str):
+def load_data(path, target, features):
     df = pd.read_csv(path)
-    if "ts" in df.columns:
-        df["ts"] = pd.to_datetime(df["ts"])
-        df = df.sort_values("ts").reset_index(drop=True)
+    required = set(features + [target])
+    missing = required - set(df.columns)
+    if missing:
+        logger.error(f'Columnas faltantes: {missing} en {path}')
+        raise ValueError('Columnas faltantes en dataset.')
+    df = df.dropna(subset=features + [target])
+    logger.info(f'Dataset cargado: {len(df)} filas, {len(features)} features')
     return df
 
+def scale_features(df, features, method="none"):
+    if method == "std":
+        scaler = StandardScaler()
+        df[features] = scaler.fit_transform(df[features])
+        logger.info('Features escalados: StandardScaler')
+    elif method == "minmax":
+        scaler = MinMaxScaler()
+        df[features] = scaler.fit_transform(df[features])
+        logger.info('Features escalados: MinMaxScaler')
+    else:
+        logger.info('Features sin escalado adicional')
+    return df
 
-def train_val_test_split_time(df, train_ratio=0.7, val_ratio=0.15):
-    n = len(df)
-    n_train = int(n * train_ratio)
-    n_val = int(n * val_ratio)
-    train = df.iloc[:n_train]
-    val = df.iloc[n_train:n_train + n_val]
-    test = df.iloc[n_train + n_val:]
-    return train, val, test
+def get_split(df, test_size, split_type="ts", random_state=42):
+    X, y = df.drop(columns=["ts"]), df["y"]
+    if split_type == "ts":
+        tscv = TimeSeriesSplit(n_splits=int(1/test_size))
+        splits = list(tscv.split(X))
+        train_idx, test_idx = splits[-1]
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state, shuffle=True)
+    logger.info(f'Split realizado: train={len(X_train)}, test={len(X_test)}')
+    return X_train, X_test, y_train, y_test
 
+def train_model(X_train, y_train, params):
+    model = lgb.LGBMClassifier(**params)
+    model.fit(X_train, y_train)
+    return model
 
-def pick_feature_cols(df):
-    drop_cols = {"ts","open","high","low","close","fwd_ret","y"}
-    seen = set()
-    def base(c): return c.split(".")[0]
-    cols = []
-    for c in df.columns:
-        if c in drop_cols:
-            continue
-        if not pd.api.types.is_numeric_dtype(df[c]):
-            continue
-        b = base(c)
-        if b in seen:
-            continue
-        seen.add(b)
-        cols.append(c)
-    return cols
-
-
-def evaluate_cls(y_true, y_prob, threshold=0.5):
-    y_pred = (y_prob >= threshold).astype(int)
-    out = {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
-        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-        "roc_auc": float(roc_auc_score(y_true, y_prob)) if len(np.unique(y_true)) == 2 else np.nan,
-        "cm": confusion_matrix(y_true, y_pred).tolist(),
+def eval_model(model, X_test, y_test, threshold=0.5):
+    y_proba = model.predict_proba(X_test)[:,1]
+    y_pred = (y_proba > threshold).astype(int)
+    metrics = {
+        "accuracy": accuracy_score(y_test, y_pred),
+        "precision": precision_score(y_test, y_pred, zero_division=0),
+        "recall": recall_score(y_test, y_pred, zero_division=0),
+        "f1": f1_score(y_test, y_pred, zero_division=0),
+        "roc_auc": roc_auc_score(y_test, y_proba),
+        "conf_matrix": confusion_matrix(y_test, y_pred).tolist()
     }
-    return out
+    logger.info(f"Métricas test: {metrics}")
+    return metrics, y_pred, y_proba
 
+def export_metrics(metrics, path):
+    pd.DataFrame([metrics]).to_csv(path, index=False)
+    logger.info(f"Métricas guardadas en {path}")
 
-def simple_pnl(back_df, y_prob, fee=0.0007, threshold=0.55):
-    y_prob = np.asarray(y_prob)
-    signals = (y_prob >= threshold).astype(int)
-    gross = back_df["fwd_ret"].fillna(0).to_numpy() * signals
-    net = gross - (2 * fee * signals)  # ida y vuelta
-    equity = (1 + pd.Series(net)).cumprod()
-    return {
-        "trades": int(signals.sum()),
-        "avg_trade_ret_%": float((gross[signals == 1].mean() * 100) if signals.sum() else 0.0),
-        "total_ret_%": float((equity.iloc[-1] - 1) * 100),
-        "equity_curve": equity.tolist(),
-    }
+def save_model(model, path):
+    joblib.dump(model, path)
+    logger.info(f"Modelo guardado en {path}")
 
-# ======================================================
-# ENTRENAMIENTO PRINCIPAL
-# ======================================================
+def export_predictions(preds, probs, out_path):
+    pd.DataFrame({"y_pred": preds, "y_proba": probs}).to_csv(out_path, index=False)
+    logger.info(f"Predicciones guardadas en {out_path}")
 
 def main():
-    ap = argparse.ArgumentParser(description="Entrena modelo (GB o RF) optimizando precisión con tabla de thresholds.")
-    ap.add_argument("--data", type=str, default="data/BNBUSDT_4h_features_h6.csv")
-    ap.add_argument("--model", type=str, choices=["gb","rf"], default="gb")
-    ap.add_argument("--fee", type=float, default=0.0007)
-    ap.add_argument("--outdir", type=str, default="models")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description="Entrenamiento robusto LightGBM baseline.")
+    parser.add_argument("--data", required=True)
+    parser.add_argument("--features", nargs="+", required=True)
+    parser.add_argument("--target", default="y")
+    parser.add_argument("--model-out", default="models/lgb.pkl")
+    parser.add_argument("--metrics-out", default="models/lgb_metrics.csv")
+    parser.add_argument("--preds-out", default="models/lgb_preds.csv")
+    parser.add_argument("--test-size", type=float, default=0.2)
+    parser.add_argument("--split-type", choices=["ts", "random"], default="ts")
+    parser.add_argument("--scale", choices=["none", "std", "minmax"], default="none")
+    parser.add_argument("--learning-rate", type=float, default=0.07)
+    parser.add_argument("--n-estimators", type=int, default=100)
+    parser.add_argument("--threshold", type=float, default=0.5)
+    args = parser.parse_args()
 
-    os.makedirs(args.outdir, exist_ok=True)
-
-    # ==========================
-    # Cargar dataset
-    # ==========================
-    df = load_dataset(args.data)
-    feat_cols = pick_feature_cols(df)
-
-    train, val, test = train_val_test_split_time(df)
-    X_train, y_train = train[feat_cols].values, train["y"].values
-    X_val,   y_val   = val[feat_cols].values,   val["y"].values
-    X_test,  y_test  = test[feat_cols].values,  test["y"].values
-
-    # ==========================
-    # Escalado de datos
-    # ==========================
-    scaler = StandardScaler()
-    X_train_s = scaler.fit_transform(X_train)
-    X_val_s   = scaler.transform(X_val)
-    X_test_s  = scaler.transform(X_test)
-
-    # ==========================
-    # Modelo
-    # ==========================
-    if args.model == "gb":
-        clf = GradientBoostingClassifier(random_state=42)
-        Xtr, Xva, Xte = X_train_s, X_val_s, X_test_s
-    else:
-        clf = RandomForestClassifier(
-            n_estimators=400,
-            max_depth=None,
-            n_jobs=-1,
-            class_weight="balanced_subsample",
-            random_state=42
-        )
-        Xtr, Xva, Xte = X_train, X_val, X_test
-
-    # ==========================
-    # Entrenamiento
-    # ==========================
-    clf.fit(Xtr, y_train)
-    
-    # ==========================
-    # Búsqueda de threshold (0.55–0.80) y tabla comparativa
-    # ==========================
-    val_prob = clf.predict_proba(Xva)[:, 1]
-
-    candidates = np.linspace(0.55, 0.80, 11)  # 0.55, 0.58, ..., 0.80
-    rows = []
-    for th in candidates:
-        sig = (val_prob >= th)
-        trades = int(sig.sum())
-        tp = int(((sig == 1) & (y_val == 1)).sum())
-        prec = (tp / trades) if trades > 0 else 0.0
-        rows.append({"threshold": float(th), "precision": float(prec), "trades": trades})
-
-    # imprimir tabla ordenada
-    table = sorted(rows, key=lambda r: (r["precision"], r["trades"]), reverse=True)
-    print("\n=== Tabla thresholds (VALIDACIÓN) ===")
-    print("thr\tprec\ttrades")
-    for r in table:
-        print(f"{r['threshold']:.2f}\t{r['precision']:.3f}\t{r['trades']}")
-
-    # Objetivo: precisión mínima con un volumen decente de señales
-    TARGET_PREC = 0.70
-    MIN_TRADES = 150  # sube/baja este número para ajustar frecuencia
-
-    best = None
-    for r in table:
-        if r["precision"] >= TARGET_PREC and r["trades"] >= MIN_TRADES:
-            best = r
-            break
-
-    if best is None:
-        # fallback: el de mayor precisión que cumpla al menos 80 trades
-        for r in table:
-            if r["trades"] >= 80:
-                best = r
-                break
-
-    if best is None:
-        # último recurso: el top de la tabla
-        best = table[0]
-
-    chosen_th = float(best["threshold"])
-    print(f"\n>>> Threshold elegido (por PRECISIÓN objetivo): {chosen_th:.3f} | precision {best['precision']:.3f} | trades {best['trades']}")
-
-    # ==========================
-    # Evaluación
-    # ==========================
-    test_prob = clf.predict_proba(Xte)[:, 1]
-
-    val_metrics  = evaluate_cls(y_val,  val_prob,  threshold=chosen_th)
-    test_metrics = evaluate_cls(y_test, test_prob, threshold=chosen_th)
-    val_back  = simple_pnl(val.reset_index(drop=True),  val_prob,  fee=args.fee, threshold=chosen_th)
-    test_back = simple_pnl(test.reset_index(drop=True), test_prob, fee=args.fee, threshold=chosen_th)
-
-    # ==========================
-    # Resultados
-    # ==========================
-    print("\n=== Features usadas ===")
-    print(feat_cols)
-    print("\n=== VALIDACIÓN ===")
-    print(val_metrics)
-    print("\nPnL VALIDACIÓN:", val_back)
-    print("\n=== TEST ===")
-    print(test_metrics)
-    print("\nPnL TEST:", test_back)
-
-    # ==========================
-    # Guardar modelo y reporte
-    # ==========================
-    model_path  = os.path.join(args.outdir, f"baseline_{args.model}.pkl")
-    scaler_path = os.path.join(args.outdir, f"scaler_{args.model}.pkl")
-    joblib.dump(clf, model_path)
-    joblib.dump(scaler, scaler_path)
-
-    summary = {
-        "feat_cols": feat_cols,
-        "val_metrics": val_metrics,
-        "val_back": val_back,
-        "test_metrics": test_metrics,
-        "test_back": test_back,
-        "best_threshold": chosen_th,
-        "fee": args.fee,
-        "rows": len(df),
-        "model": args.model,
-        "model_path": model_path,
-        "scaler_path": scaler_path,
-        "data": args.data,
-        "threshold_table": table,
-        "min_trades_constraint": MIN_TRADES,
-    }
-
-    pd.Series(summary).to_json(os.path.join(args.outdir, f"report_{args.model}.json"), indent=2)
-    print(f"\nModelo guardado en: {model_path}")
-    print(f"Reporte JSON en:    {os.path.join(args.outdir, f'report_{args.model}.json')}")
+    params = {"learning_rate": args.learning_rate, "n_estimators": args.n_estimators, "random_state": 42}
+    df = load_data(args.data, args.target, args.features)
+    df = scale_features(df, args.features, method=args.scale)
+    X_train, X_test, y_train, y_test = get_split(df, args.test_size, split_type=args.split_type)
+    model = train_model(X_train[args.features], y_train, params)
+    metrics, y_pred, y_proba = eval_model(model, X_test[args.features], y_test, threshold=args.threshold)
+    export_metrics(metrics, args.metrics_out)
+    export_predictions(y_pred, y_proba, args.preds_out)
+    save_model(model, args.model_out)
+    logger.info("Entrenamiento y evaluación completados.")
 
 if __name__ == "__main__":
     main()
