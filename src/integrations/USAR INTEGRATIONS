@@ -1,0 +1,5 @@
+CryptoPanic: python src/integrations/cryptopanic.py --cache src/integrations/cryptopanic.csv --refresh --save-hourly src/integrations/cryptopanic_hourly.csv
+
+CoinMarketCap: python src/integrations/coinmarketcap.py --cache src/integrations/coinmarketcap.csv --refresh --save-hourly src/integrations/coinmarketcap_hourly.csv
+
+Fear&Greed: python src/integrations/fear_greed.py --cache src/integrations/fear_greed.csv --refresh --save-hourly src/integrations/fear_greed_hourly.csv

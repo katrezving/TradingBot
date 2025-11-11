@@ -13,7 +13,15 @@ logger = logging.getLogger(__name__)
 # ==============================
 # Utilidades
 # ==============================
-def _merge_asof_with_tolerance(base_df, add_df, on="timestamp", tolerance_hours=6, prefix=None):
+def _merge_asof_with_tolerance(base_df, add_df, on="ts", tolerance_hours=6, prefix=None):
+    def _ensure_ts(df):
+        if 'timestamp' in df.columns and 'ts' not in df.columns:
+            df = df.rename(columns={'timestamp':'ts'})
+        return df
+
+    base_df = _ensure_ts(base_df)
+    add_df = _ensure_ts(add_df)
+
     if add_df is None or add_df.empty:
         logger.warning("El DataFrame adicional está vacío o es None; se omite el merge_asof.")
         return base_df
