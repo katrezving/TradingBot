@@ -13,5 +13,6 @@ TradingBot/
 
 # General
 *.zip
-*.csvcoinmarketcap-historical-data.zip
+*.csv
+coinmarketcap-historical-data.zip
 src/integrations/coinmarketcap_historical.csv
