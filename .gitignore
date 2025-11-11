@@ -4,11 +4,6 @@ __pycache__/
 *.egg-info/
 .venv/
 
-# Data & models
-/data/
-/models/
-/logs/
-
 # Env & local
 .env
 .DS_Store
